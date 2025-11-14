@@ -2507,14 +2507,18 @@ class CodeCombinerApp(QMainWindow):
 
     @log_performance
     def get_checked_files_from_tree(self):
-        """Collect all checked files from the tree, respecting folders and reverse ignore mode."""
+        """Collect all checked files from the tree, respecting folders and reverse ignore mode.
+        Uses filesystem scanning for folders to handle lazy-loaded directories."""
         perf_logger.info("Collecting checked files from tree")
         checked_files = []
         reverse_mode = self.file_tree_widget.reverse_ignore_mode
         logger.info(f"Reverse ignore mode: {reverse_mode}")
 
-        def collect_files(item):
-            # Skip placeholders
+        # Build set of excluded folders from tree (user explicitly checked to exclude)
+        excluded_folders = set()
+
+        def collect_exclusions(item):
+            """First pass: collect folders that user explicitly excluded."""
             if item.text(0) == "Loading...":
                 return
 
@@ -2522,46 +2526,87 @@ class CodeCombinerApp(QMainWindow):
             is_checked = item.checkState(0) == Qt.CheckState.Checked
             item_type = item.text(1)
 
-            logger.debug(f"Item: {item.text(0)}, Type: {item_type}, Checked: {is_checked}, Reverse: {reverse_mode}")
-
-            # Handle folders
             if item_type == "folder":
-                # Normal mode: checked = IGNORE (skip), unchecked = INCLUDE (explore)
-                # Reverse mode: checked = INCLUDE (explore), unchecked = IGNORE (skip)
-                should_explore = is_checked if reverse_mode else not is_checked
+                # Normal mode: checked = excluded
+                # Reverse mode: unchecked = excluded
+                is_excluded = is_checked if not reverse_mode else not is_checked
 
-                if not should_explore:
-                    logger.debug(f"Skipping folder: {item.text(0)} (checked={is_checked}, reverse={reverse_mode})")
-                    return
+                if is_excluded:
+                    excluded_folders.add(item_path)
+                    logger.debug(f"Folder marked for exclusion: {item_path}")
 
-                # Explore this folder's children
-                logger.debug(f"Exploring folder: {item.text(0)}")
+                # Check children (even if this folder is excluded, we want to know about nested exclusions)
                 for i in range(item.childCount()):
-                    collect_files(item.child(i))
+                    collect_exclusions(item.child(i))
 
-            # Handle files
-            elif item_type in ["text", "binary"]:
-                # Only process text files
-                if item_type != "text":
-                    return
-
-                # Normal mode: unchecked = INCLUDE, checked = IGNORE
-                # Reverse mode: checked = INCLUDE, unchecked = IGNORE
-                should_include = is_checked if reverse_mode else not is_checked
-
-                if should_include:
-                    logger.debug(f"Including file: {item_path} (checked={is_checked}, reverse={reverse_mode})")
-                    checked_files.append(item_path)
-                else:
-                    logger.debug(f"Ignoring file: {item.text(0)} (checked={is_checked}, reverse={reverse_mode})")
-
-        # Start from root
+        # First, collect all explicit exclusions from loaded tree
         root = self.file_tree_widget.invisibleRootItem()
         if root.childCount() > 0:
-            collect_files(root.child(0))
+            collect_exclusions(root.child(0))
+
+        # Now scan filesystem, respecting exclusions
+        logger.info(f"Excluded folders: {excluded_folders}")
+
+        def should_exclude_path(path):
+            """Check if a path should be excluded based on folder exclusions."""
+            for excluded in excluded_folders:
+                if path == excluded or path.startswith(excluded + os.sep):
+                    return True
+            return False
+
+        # Check if root folder should be scanned
+        root = self.file_tree_widget.invisibleRootItem()
+        if root.childCount() > 0:
+            root_item = root.child(0)
+            root_is_checked = root_item.checkState(0) == Qt.CheckState.Checked
+
+            # Normal mode: unchecked = include, so scan if unchecked
+            # Reverse mode: checked = include, so scan if checked
+            should_scan = root_is_checked if reverse_mode else not root_is_checked
+
+            if should_scan:
+                root_path = self.input_folder_edit.text()
+                if os.path.isdir(root_path):
+                    logger.info(f"Scanning root folder: {root_path} (reverse_mode={reverse_mode}, root_checked={root_is_checked})")
+                    self._collect_files_from_folder_with_exclusions(root_path, checked_files, excluded_folders)
+            else:
+                logger.info(f"Root folder excluded (reverse_mode={reverse_mode}, root_checked={root_is_checked})")
 
         logger.info(f"Total files collected: {len(checked_files)}")
         return checked_files
+
+    def _collect_files_from_folder_with_exclusions(self, folder_path, file_list, excluded_folders):
+        """Recursively collect all text files from a folder, respecting exclusions."""
+        try:
+            path = Path(folder_path)
+            if not path.exists() or not path.is_dir():
+                return
+
+            # Check if this folder is excluded
+            folder_path_str = str(path)
+            for excluded in excluded_folders:
+                if folder_path_str == excluded or folder_path_str.startswith(excluded + os.sep):
+                    logger.debug(f"Skipping excluded folder: {folder_path_str}")
+                    return
+
+            for item_path in path.iterdir():
+                try:
+                    if item_path.is_dir():
+                        # Recurse into subdirectory
+                        self._collect_files_from_folder_with_exclusions(str(item_path), file_list, excluded_folders)
+                    else:
+                        # Check if it's a text file
+                        extension = item_path.suffix.lower()
+                        if extension not in self.file_tree_widget.ignored_extensions:
+                            if is_text_file(str(item_path)):
+                                logger.debug(f"Adding file: {str(item_path)}")
+                                file_list.append(str(item_path))
+                except Exception as e:
+                    logger.error(f"Error collecting file {item_path}: {e}")
+                    continue
+
+        except Exception as e:
+            logger.error(f"Error collecting from folder {folder_path}: {e}")
 
     def _collect_files_from_folder(self, folder_path, file_list):
         """Recursively collect all text files from a folder (even if not loaded in tree)."""
