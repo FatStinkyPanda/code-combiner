@@ -942,6 +942,9 @@ class FileTreeWidget(QTreeWidget):
         perf_logger.info(f"Loading folder: {folder_path}")
         start_time = time.perf_counter()
 
+        # Block signals during initial load to prevent cascade
+        self.blockSignals(True)
+
         try:
             path = Path(folder_path)
             if not path.exists() or not path.is_dir():
@@ -1037,6 +1040,9 @@ class FileTreeWidget(QTreeWidget):
         except Exception as e:
             logger.error(f"Error loading folder {folder_path}: {e}")
             logger.debug(traceback.format_exc())
+        finally:
+            # Always unblock signals
+            self.blockSignals(False)
 
     def _quick_file_type_check(self, file_path):
         """Fast heuristic to determine if file is likely text or binary based on extension."""
@@ -1077,6 +1083,9 @@ class FileTreeWidget(QTreeWidget):
         self.loaded_directories.clear()
         self.ignored_items.clear()
 
+        # Block signals during root setup to prevent cascade
+        self.blockSignals(True)
+
         # Create root item
         root_name = os.path.basename(folder_path)
         root_item = QTreeWidgetItem(self, [root_name, "folder", ""])
@@ -1087,6 +1096,9 @@ class FileTreeWidget(QTreeWidget):
         # Load immediate contents of root
         self.loaded_directories.add(folder_path)
         self.load_folder_contents(root_item, folder_path)
+
+        # Unblock signals before expanding (expansion should be normal)
+        self.blockSignals(False)
 
         # Expand root
         self.expandItem(root_item)
@@ -2369,6 +2381,11 @@ class CodeCombinerApp(QMainWindow):
         # Reverse mode (is_reverse=True): Everything starts UNCHECKED
         # User then manually unchecks (normal) or checks (reverse) what they want
 
+        # Block signals to prevent cascade during bulk update
+        tree = item.treeWidget()
+        if tree:
+            tree.blockSignals(True)
+
         new_state = Qt.CheckState.Unchecked if is_reverse else Qt.CheckState.Checked
         item.setCheckState(0, new_state)
 
@@ -2380,6 +2397,10 @@ class CodeCombinerApp(QMainWindow):
             # Skip "Loading..." placeholder
             if child.text(0) != "Loading...":
                 self._update_tree_check_states(child, is_reverse)
+
+        # Unblock signals
+        if tree:
+            tree.blockSignals(False)
 
     def collect_and_display_extensions(self):
         """Collect file extensions from currently loaded tree items and display as checkboxes."""
@@ -2764,6 +2785,11 @@ class CodeCombinerApp(QMainWindow):
         """Recursively update all children checkboxes"""
         check_state = Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked
 
+        # Block signals to prevent cascade
+        tree = item.treeWidget()
+        if tree:
+            tree.blockSignals(True)
+
         for i in range(item.childCount()):
             child = item.child(i)
             if child.flags() & Qt.ItemFlag.ItemIsUserCheckable:
@@ -2772,6 +2798,10 @@ class CodeCombinerApp(QMainWindow):
             # Recursively update children of this child if it's a folder
             if child.text(1) == "folder":
                 self._update_children_check_state(child, checked)
+
+        # Unblock signals
+        if tree:
+            tree.blockSignals(False)
 
     def _update_parent_check_state(self, parent_item):
         """Update parent checkbox based on children state"""
@@ -2789,12 +2819,15 @@ class CodeCombinerApp(QMainWindow):
                 else:
                     all_checked = False
 
+        # Block signals to prevent cascade when updating parent state
+        parent_item.treeWidget().blockSignals(True)
         if all_checked:
             parent_item.setCheckState(0, Qt.CheckState.Checked)
         elif all_unchecked:
             parent_item.setCheckState(0, Qt.CheckState.Unchecked)
         else:
             parent_item.setCheckState(0, Qt.CheckState.PartiallyChecked)
+        parent_item.treeWidget().blockSignals(False)
 
         # Recursively update parent's parent
         self._update_parent_check_state(parent_item.parent())
@@ -3022,8 +3055,12 @@ class CodeCombinerApp(QMainWindow):
         """Select all files in the tree. The checked parameter is from the signal and is ignored."""
         root_item = self.file_tree_widget.topLevelItem(0)
         if root_item:
+            # Block signals during bulk operation
+            self.file_tree_widget.blockSignals(True)
             root_item.setCheckState(0, Qt.CheckState.Checked)
             self._update_children_check_state(root_item, True)
+            self.file_tree_widget.blockSignals(False)
+
             self.excluded_paths.clear()
 
             # Update the output preview
@@ -3036,8 +3073,11 @@ class CodeCombinerApp(QMainWindow):
         """Deselect all files in the tree. The checked parameter is from the signal and is ignored."""
         root_item = self.file_tree_widget.topLevelItem(0)
         if root_item:
+            # Block signals during bulk operation
+            self.file_tree_widget.blockSignals(True)
             root_item.setCheckState(0, Qt.CheckState.Unchecked)
             self._update_children_check_state(root_item, False)
+            self.file_tree_widget.blockSignals(False)
 
             # Add all files to excluded paths
             input_folder = self.input_folder_edit.text()
