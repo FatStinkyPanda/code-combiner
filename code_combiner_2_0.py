@@ -3180,7 +3180,11 @@ class CodeCombinerApp(QMainWindow):
             preserving file structures and adding clear separators.</p>
             <p>Perfect for AI analysis, code reviews, and documentation.</p>
             <p style="margin-top: 20px;">Features: Lazy Loading, Parallel Processing, Performance Logging</p>
-            <p>Created with PyQt6</p>
+            <p style="margin-top: 20px; font-weight: bold;">Designed, Created, and Developed by</p>
+            <p style="font-size: 16px; color: #007aff;"><b>Daniel A Bissey</b></p>
+            <p>GitHub: <a href="https://github.com/FatStinkyPanda">@FatStinkyPanda</a></p>
+            <p>Email: support@fatstinkypanda.com</p>
+            <p style="margin-top: 15px; font-size: 12px; color: #666;">Created with PyQt6</p>
         </div>
         """
         QMessageBox.about(self, "About Code Combiner", about_text)
