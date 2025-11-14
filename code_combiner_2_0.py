@@ -978,14 +978,9 @@ class FileTreeWidget(QTreeWidget):
                         dir_item.setFlags(dir_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
 
                         # Set initial check state based on ignore mode
-                        full_path = str(item_path)
-                        if self.reverse_ignore_mode:
-                            # In reverse mode, unchecked by default
-                            dir_item.setCheckState(0, Qt.CheckState.Unchecked)
-                        else:
-                            # Normal mode: checked unless ignored
-                            is_ignored = full_path in self.ignored_items
-                            dir_item.setCheckState(0, Qt.CheckState.Unchecked if is_ignored else Qt.CheckState.Checked)
+                        # Simple: Normal mode = checked, Reverse mode = unchecked
+                        initial_state = Qt.CheckState.Unchecked if self.reverse_ignore_mode else Qt.CheckState.Checked
+                        dir_item.setCheckState(0, initial_state)
 
                         # Add a placeholder child to make it expandable
                         placeholder = QTreeWidgetItem(dir_item, ["Loading...", "", ""])
@@ -1025,12 +1020,9 @@ class FileTreeWidget(QTreeWidget):
                         file_item.setFlags(file_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
 
                         # Set initial check state
-                        full_path = str(item_path)
-                        if self.reverse_ignore_mode:
-                            file_item.setCheckState(0, Qt.CheckState.Unchecked)
-                        else:
-                            is_ignored = full_path in self.ignored_items
-                            file_item.setCheckState(0, Qt.CheckState.Unchecked if is_ignored else Qt.CheckState.Checked)
+                        # Simple: Normal mode = checked, Reverse mode = unchecked
+                        initial_state = Qt.CheckState.Unchecked if self.reverse_ignore_mode else Qt.CheckState.Checked
+                        file_item.setCheckState(0, initial_state)
 
                         files_processed += 1
 
@@ -2358,37 +2350,36 @@ class CodeCombinerApp(QMainWindow):
 
     def toggle_reverse_ignore_mode(self, state):
         """Toggle between normal and reverse ignore modes."""
-        self.file_tree_widget.reverse_ignore_mode = (state == Qt.CheckState.Checked.value)
+        is_reverse = (state == Qt.CheckState.Checked.value)
+        logger.info(f"Toggling reverse ignore mode to: {is_reverse}")
+        self.file_tree_widget.reverse_ignore_mode = is_reverse
 
         # Update all existing items' check states
         root = self.file_tree_widget.invisibleRootItem()
         if root.childCount() > 0:
-            self._update_tree_check_states(root.child(0))
+            self._update_tree_check_states(root.child(0), is_reverse)
 
-    def _update_tree_check_states(self, item):
+    def _update_tree_check_states(self, item, is_reverse):
         """Recursively update check states based on current ignore mode."""
         if item is None:
             return
 
-        # Get item path
-        item_path = self.file_tree_widget.get_item_path(item)
+        # Simple logic:
+        # Normal mode (is_reverse=False): Everything starts CHECKED
+        # Reverse mode (is_reverse=True): Everything starts UNCHECKED
+        # User then manually unchecks (normal) or checks (reverse) what they want
 
-        # Update check state based on mode
-        if self.file_tree_widget.reverse_ignore_mode:
-            # In reverse mode: unchecked by default, checked if in ignored_items
-            is_selected = item_path in self.file_tree_widget.ignored_items
-            item.setCheckState(0, Qt.CheckState.Checked if is_selected else Qt.CheckState.Unchecked)
-        else:
-            # Normal mode: checked by default, unchecked if in ignored_items
-            is_ignored = item_path in self.file_tree_widget.ignored_items
-            item.setCheckState(0, Qt.CheckState.Unchecked if is_ignored else Qt.CheckState.Checked)
+        new_state = Qt.CheckState.Unchecked if is_reverse else Qt.CheckState.Checked
+        item.setCheckState(0, new_state)
+
+        logger.debug(f"Updated {item.text(0)} to {new_state}")
 
         # Recursively update children
         for i in range(item.childCount()):
             child = item.child(i)
             # Skip "Loading..." placeholder
             if child.text(0) != "Loading...":
-                self._update_tree_check_states(child)
+                self._update_tree_check_states(child, is_reverse)
 
     def collect_and_display_extensions(self):
         """Collect file extensions from currently loaded tree items and display as checkboxes."""
@@ -2491,7 +2482,7 @@ class CodeCombinerApp(QMainWindow):
         perf_logger.info("Collecting checked files from tree")
         checked_files = []
         reverse_mode = self.file_tree_widget.reverse_ignore_mode
-        logger.debug(f"Reverse ignore mode: {reverse_mode}")
+        logger.info(f"Reverse ignore mode: {reverse_mode}")
 
         def collect_files(item):
             # Skip placeholders
@@ -2502,19 +2493,17 @@ class CodeCombinerApp(QMainWindow):
             is_checked = item.checkState(0) == Qt.CheckState.Checked
             item_type = item.text(1)
 
+            logger.debug(f"Item: {item.text(0)}, Type: {item_type}, Checked: {is_checked}")
+
             # Handle folders
             if item_type == "folder":
-                # In reverse mode: if folder is checked, include all files in it
-                # In normal mode: if folder is unchecked, skip all files in it
-                if (reverse_mode and is_checked) or (not reverse_mode and not is_checked):
-                    # For reverse mode with checked folder: recursively add all text files
-                    # For normal mode with unchecked folder: skip (don't recurse)
-                    if reverse_mode:
-                        # Collect all text files from this folder recursively (even unloaded ones)
-                        self._collect_files_from_folder(item_path, checked_files)
-                    return  # In normal mode, skip unchecked folders
+                # In BOTH modes: if folder is checked, we need to look at its children
+                # If folder is unchecked, skip it entirely
+                if not is_checked:
+                    logger.debug(f"Skipping unchecked folder: {item.text(0)}")
+                    return
 
-                # Continue to children for partially selected folders
+                # Folder is checked - recurse into children
                 for i in range(item.childCount()):
                     collect_files(item.child(i))
 
@@ -2524,18 +2513,19 @@ class CodeCombinerApp(QMainWindow):
                 if item_type != "text":
                     return
 
-                # In reverse mode: include if checked
-                # In normal mode: include if not unchecked (checked)
-                should_include = is_checked if reverse_mode else is_checked
-
-                if should_include:
+                # Simple logic: if checked, include it (works for both modes)
+                if is_checked:
+                    logger.debug(f"Adding file: {item_path}")
                     checked_files.append(item_path)
+                else:
+                    logger.debug(f"Skipping unchecked file: {item.text(0)}")
 
         # Start from root
         root = self.file_tree_widget.invisibleRootItem()
         if root.childCount() > 0:
             collect_files(root.child(0))
 
+        logger.info(f"Total files collected: {len(checked_files)}")
         return checked_files
 
     def _collect_files_from_folder(self, folder_path, file_list):
