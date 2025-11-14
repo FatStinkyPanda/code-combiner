@@ -2532,8 +2532,10 @@ class CodeCombinerApp(QMainWindow):
                 is_excluded = is_checked if not reverse_mode else not is_checked
 
                 if is_excluded:
-                    excluded_folders.add(item_path)
-                    logger.debug(f"Folder marked for exclusion: {item_path}")
+                    # Normalize path for consistent comparison
+                    normalized_path = os.path.normcase(os.path.normpath(item_path))
+                    excluded_folders.add(normalized_path)
+                    logger.debug(f"Folder marked for exclusion: {normalized_path}")
 
                 # Check children (even if this folder is excluded, we want to know about nested exclusions)
                 for i in range(item.childCount()):
@@ -2582,11 +2584,18 @@ class CodeCombinerApp(QMainWindow):
             if not path.exists() or not path.is_dir():
                 return
 
-            # Check if this folder is excluded
-            folder_path_str = str(path)
+            # Check if this folder is excluded (normalize for comparison)
+            folder_path_normalized = os.path.normcase(os.path.normpath(str(path)))
+
             for excluded in excluded_folders:
-                if folder_path_str == excluded or folder_path_str.startswith(excluded + os.sep):
-                    logger.debug(f"Skipping excluded folder: {folder_path_str}")
+                # Check exact match or if this folder is a subfolder of an excluded folder
+                # Need to ensure excluded path ends with separator when checking subfolders
+                excluded_with_sep = excluded + os.sep
+                if folder_path_normalized == excluded:
+                    logger.info(f"EXCLUDING folder (exact match): {folder_path_normalized}")
+                    return
+                elif folder_path_normalized.startswith(excluded_with_sep):
+                    logger.info(f"EXCLUDING folder (subfolder of {excluded}): {folder_path_normalized}")
                     return
 
             for item_path in path.iterdir():
