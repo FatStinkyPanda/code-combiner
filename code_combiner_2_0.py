@@ -2308,7 +2308,8 @@ class CodeCombinerApp(QMainWindow):
             self.save_settings()
 
     @log_performance
-    def scan_folder(self):
+    def scan_folder(self, checked=False):
+        """Scan the selected folder. The checked parameter is from the signal and is ignored."""
         input_folder = self.input_folder_edit.text()
         logger.info(f"User initiated scan for folder: {input_folder}")
 
